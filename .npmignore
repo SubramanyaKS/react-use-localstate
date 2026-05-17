@@ -1,0 +1,46 @@
+# Prerequisites
+.git
+.gitignore
+.github/
+
+# Development tooling
+.eslintignore
+.eslintrc*
+.prettierignore
+.prettierrc*
+tsconfig.json
+jest.config.js
+vitest.config.ts
+babel.config.js
+
+# Source files and TypeScript source
+src/
+
+# Testing files
+__tests__/
+tests/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Design/Asset files (if any)
+assets/
+screenshots/
+
+# Package managers
+node_modules/
+yarn.lock
+package-lock.json
+pnpm-lock.yaml
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
