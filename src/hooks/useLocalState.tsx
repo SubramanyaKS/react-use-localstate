@@ -4,42 +4,32 @@ export function useLocalState<T>(
   key: string, 
   initialValue: T | (() => T)
 ): [T, Dispatch<SetStateAction<T>>] {
-  // 1. Initialize state
+  
+  // Initial State
   const [state, setState] = useState<T>(() => {
-    // Create a reusable fallback for cleaner code
-    const getFallback = () => {
-      return typeof initialValue === 'function' 
-        ? (initialValue as () => T)() 
-        : initialValue;
-    };
+    return typeof initialValue === 'function' 
+      ? (initialValue as () => T)() 
+      : initialValue;
+  });
 
-    // Immediate SSR Safety Check
-    if (typeof window === 'undefined') {
-      return getFallback();
-    }
-
+  // Fetch from LocalStorage on Mount
+  useEffect(() => {
     try {
       const item = window.localStorage.getItem(key);
       if (item !== null) {
         try {
-          // Try parsing as JSON (objects, arrays, numbers, booleans)
-          return JSON.parse(item) as T;
+          setState(JSON.parse(item) as T);
         } catch {
-          // If JSON.parse fails, it's a raw string! Return it directly.
-          return item as unknown as T;
+          setState(item as unknown as T);
         }
       }
     } catch (error) {
       console.warn(`Error reading localStorage key "${key}":`, error);
     }
+  }, [key]);
 
-    // Fallback if key doesn't exist or localStorage errored out
-    return getFallback();
-  });
-
-  // 2. Update localStorage whenever the state changes
+  // Persist state changes to LocalStorage
   useEffect(() => {
-    // Added SSR safety check here as well!
     if (typeof window !== 'undefined') {
       try {
         window.localStorage.setItem(key, JSON.stringify(state));
@@ -49,6 +39,23 @@ export function useLocalState<T>(
     }
   }, [key, state]);
 
-  // 3. Return exactly what useState returns
+  // Sync with other browser tabs
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === key && e.newValue !== null) {
+        try {
+          setState(JSON.parse(e.newValue) as T);
+        } catch {
+          setState(e.newValue as unknown as T);
+        }
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [key]);
+
   return [state, setState];
 }

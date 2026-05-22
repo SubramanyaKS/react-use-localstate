@@ -8,6 +8,19 @@ describe('useLocalState Hook', () => {
     vi.clearAllMocks();
   });
 
+  /**
+   * Helper function to simulate storage event from another tab
+   */
+  const simulateStorageEvent = (key: string, newValue: string | null, oldValue: string | null = null) => {
+    const event = new StorageEvent('storage', {
+      key,
+      newValue,
+      oldValue,
+      storageArea: localStorage,
+    });
+    window.dispatchEvent(event);
+  };
+
   describe('Initial State', () => {
     it('should initialize with provided value when localStorage is empty', () => {
       const { result } = renderHook(() => useLocalState('test-key', 'initial-value'));
@@ -45,6 +58,251 @@ describe('useLocalState Hook', () => {
 
       getItemSpy.mockRestore();
       consoleWarnSpy.mockRestore();
+    });
+  });
+
+  describe('Cross-Tab Synchronization', () => {
+    it('should sync state when storage changes in another tab', () => {
+      const { result } = renderHook(() => useLocalState('sync-key', 'initial'));
+      expect(result.current[0]).toBe('initial');
+
+      act(() => {
+        simulateStorageEvent('sync-key', JSON.stringify('updated-from-other-tab'));
+      });
+
+      expect(result.current[0]).toBe('updated-from-other-tab');
+    });
+
+    it('should sync object values across tabs', () => {
+      const initialObj = { count: 0, items: [] as string[] };
+      const { result } = renderHook(() => useLocalState('obj-sync-key', initialObj));
+
+      const updatedObj = { count: 5, items: ['a', 'b', 'c'] };
+
+      act(() => {
+        simulateStorageEvent('obj-sync-key', JSON.stringify(updatedObj));
+      });
+
+      expect(result.current[0]).toEqual(updatedObj);
+    });
+
+    it('should sync array values across tabs', () => {
+      const { result } = renderHook(() => useLocalState<string[]>('arr-sync-key', []));
+
+      act(() => {
+        simulateStorageEvent('arr-sync-key', JSON.stringify(['item1', 'item2', 'item3']));
+      });
+
+      expect(result.current[0]).toEqual(['item1', 'item2', 'item3']);
+    });
+
+    it('should handle raw string values from storage events', () => {
+      const { result } = renderHook(() => useLocalState('raw-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('raw-sync-key', 'plain-text-from-other-tab');
+      });
+
+      expect(result.current[0]).toBe('plain-text-from-other-tab');
+    });
+
+    it('should not sync when key does not match', () => {
+      const { result } = renderHook(() => useLocalState('key-1', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('different-key', JSON.stringify('different-value'));
+      });
+
+      expect(result.current[0]).toBe('initial');
+    });
+
+    it('should not sync when newValue is null', () => {
+      const { result } = renderHook(() => useLocalState('null-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('null-sync-key', null);
+      });
+
+      // Should remain unchanged when newValue is null
+      expect(result.current[0]).toBe('initial');
+    });
+
+    it('should handle corrupted JSON in storage events gracefully', () => {
+      const { result } = renderHook(() => useLocalState('corrupt-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('corrupt-sync-key', '{invalid json}');
+      });
+
+      // Should fall back to treating as plain string
+      expect(result.current[0]).toBe('{invalid json}');
+    });
+
+    it('should sync multiple times from different tabs', () => {
+      const { result } = renderHook(() => useLocalState('multi-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('multi-sync-key', JSON.stringify('first-update'));
+      });
+      expect(result.current[0]).toBe('first-update');
+
+      act(() => {
+        simulateStorageEvent('multi-sync-key', JSON.stringify('second-update'));
+      });
+      expect(result.current[0]).toBe('second-update');
+
+      act(() => {
+        simulateStorageEvent('multi-sync-key', JSON.stringify('third-update'));
+      });
+      expect(result.current[0]).toBe('third-update');
+    });
+
+    it('should maintain separate sync listeners for different keys', () => {
+      const { result: result1 } = renderHook(() => useLocalState('key-a', 'value-a'));
+      const { result: result2 } = renderHook(() => useLocalState('key-b', 'value-b'));
+
+      act(() => {
+        simulateStorageEvent('key-a', JSON.stringify('updated-a'));
+      });
+
+      expect(result1.current[0]).toBe('updated-a');
+      expect(result2.current[0]).toBe('value-b');
+
+      act(() => {
+        simulateStorageEvent('key-b', JSON.stringify('updated-b'));
+      });
+
+      expect(result1.current[0]).toBe('updated-a');
+      expect(result2.current[0]).toBe('updated-b');
+    });
+
+    it('should cleanup storage event listener on unmount', () => {
+      const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener');
+      const { unmount } = renderHook(() => useLocalState('cleanup-sync-key', 'initial'));
+
+      unmount();
+
+      expect(removeEventListenerSpy).toHaveBeenCalledWith('storage', expect.any(Function));
+      removeEventListenerSpy.mockRestore();
+    });
+
+    it('should re-register storage listener when key changes', () => {
+      const { result, rerender } = renderHook(
+        ({ key }) => useLocalState(key, 'initial'),
+        { initialProps: { key: 'key-1' } }
+      );
+
+      act(() => {
+        simulateStorageEvent('key-1', JSON.stringify('value-1'));
+      });
+      expect(result.current[0]).toBe('value-1');
+
+      rerender({ key: 'key-2' });
+
+      act(() => {
+        simulateStorageEvent('key-1', JSON.stringify('value-1-updated'));
+      });
+
+      // Should NOT sync because listener was updated to key-2
+      expect(result.current[0]).toBe('value-1');
+
+      act(() => {
+        simulateStorageEvent('key-2', JSON.stringify('value-2'));
+      });
+
+      expect(result.current[0]).toBe('value-2');
+    });
+
+    it('should sync numeric values correctly across tabs', () => {
+      const { result } = renderHook(() => useLocalState('num-sync-key', 0));
+
+      act(() => {
+        simulateStorageEvent('num-sync-key', JSON.stringify(42));
+      });
+
+      expect(result.current[0]).toBe(42);
+    });
+
+    it('should sync boolean values correctly across tabs', () => {
+      const { result } = renderHook(() => useLocalState('bool-sync-key', false));
+
+      act(() => {
+        simulateStorageEvent('bool-sync-key', JSON.stringify(true));
+      });
+
+      expect(result.current[0]).toBe(true);
+    });
+
+    it('should sync nested objects across tabs', () => {
+      const initialNested = {
+        user: {
+          profile: {
+            name: 'John',
+            settings: {
+              theme: 'light',
+            },
+          },
+        },
+      };
+
+      const { result } = renderHook(() => useLocalState('nested-sync-key', initialNested));
+
+      const updatedNested = {
+        user: {
+          profile: {
+            name: 'Jane',
+            settings: {
+              theme: 'dark',
+            },
+          },
+        },
+      };
+
+      act(() => {
+        simulateStorageEvent('nested-sync-key', JSON.stringify(updatedNested));
+      });
+
+      expect(result.current[0]).toEqual(updatedNested);
+      expect(result.current[0].user.profile.name).toBe('Jane');
+      expect(result.current[0].user.profile.settings.theme).toBe('dark');
+    });
+
+    it('should sync with special characters across tabs', () => {
+      const specialChars = '!@#$%^&*()_+-=[]{}|;\':"<>,.?/~`';
+      const { result } = renderHook(() => useLocalState('special-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('special-sync-key', JSON.stringify(specialChars));
+      });
+
+      expect(result.current[0]).toBe(specialChars);
+    });
+
+    it('should sync unicode characters across tabs', () => {
+      const unicodeStr = '你好 🚀 مرحبا';
+      const { result } = renderHook(() => useLocalState('unicode-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('unicode-sync-key', JSON.stringify(unicodeStr));
+      });
+
+      expect(result.current[0]).toBe(unicodeStr);
+    });
+
+    it('should maintain local state updates after receiving sync from other tab', () => {
+      const { result } = renderHook(() => useLocalState('persist-after-sync-key', 'initial'));
+
+      act(() => {
+        simulateStorageEvent('persist-after-sync-key', JSON.stringify('synced-value'));
+      });
+      expect(result.current[0]).toBe('synced-value');
+
+      act(() => {
+        result.current[1]('locally-updated');
+      });
+
+      expect(result.current[0]).toBe('locally-updated');
+      expect(localStorage.getItem('persist-after-sync-key')).toBe(JSON.stringify('locally-updated'));
     });
   });
 
@@ -462,7 +720,233 @@ describe('useLocalState Hook', () => {
     });
   });
 
+  describe('Integration: Local Updates + Cross-Tab Sync', () => {
+    it('should prioritize local updates over sync events', () => {
+      const { result } = renderHook(() => useLocalState('priority-key', 'initial'));
+
+      act(() => {
+        result.current[1]('local-update');
+      });
+      expect(result.current[0]).toBe('local-update');
+
+      act(() => {
+        simulateStorageEvent('priority-key', JSON.stringify('remote-update'));
+      });
+
+      // Remote update should take effect
+      expect(result.current[0]).toBe('remote-update');
+    });
+
+    it('should handle rapid local updates followed by sync event', () => {
+      const { result } = renderHook(() => useLocalState('rapid-sync-key', 0));
+
+      act(() => {
+        result.current[1](1);
+        result.current[1](2);
+        result.current[1](3);
+      });
+
+      expect(result.current[0]).toBe(3);
+
+      act(() => {
+        simulateStorageEvent('rapid-sync-key', JSON.stringify(100));
+      });
+
+      expect(result.current[0]).toBe(100);
+    });
+
+    it('should handle concurrent updates from multiple hook instances', () => {
+      const { result: result1 } = renderHook(() => useLocalState('shared-key', 'initial'));
+      const { result: result2 } = renderHook(() => useLocalState('shared-key', 'initial'));
+
+      act(() => {
+        result1.current[1]('updated-by-instance-1');
+      });
+
+      // Simulate other tab sync
+      act(() => {
+        simulateStorageEvent('shared-key', JSON.stringify('updated-by-instance-1'));
+      });
+
+      expect(result2.current[0]).toBe('updated-by-instance-1');
+    });
+
+    it('should handle storage event after state update in same instance', () => {
+      const { result } = renderHook(() => useLocalState('order-key', 'step-1'));
+
+      act(() => {
+        result.current[1]('step-2');
+      });
+
+      expect(localStorage.getItem('order-key')).toBe(JSON.stringify('step-2'));
+
+      act(() => {
+        simulateStorageEvent('order-key', JSON.stringify('step-3-from-other-tab'));
+      });
+
+      expect(result.current[0]).toBe('step-3-from-other-tab');
+      // Storage event updates localStorage to the new value
+      expect(localStorage.getItem('order-key')).toBe(JSON.stringify('step-3-from-other-tab'));
+    });
+  });
+
   describe('Real-world Scenarios', () => {
+    it('should sync user preferences across tabs', () => {
+      interface UserPreferences {
+        theme: 'light' | 'dark';
+        language: string;
+        notifications: boolean;
+      }
+
+      const initialPrefs: UserPreferences = {
+        theme: 'light',
+        language: 'en',
+        notifications: true,
+      };
+
+      const { result } = renderHook(() => useLocalState<UserPreferences>('user-prefs', initialPrefs));
+
+      // User changes theme in another tab
+      const updatedPrefs: UserPreferences = {
+        theme: 'dark',
+        language: 'en',
+        notifications: true,
+      };
+
+      act(() => {
+        simulateStorageEvent('user-prefs', JSON.stringify(updatedPrefs));
+      });
+
+      expect(result.current[0].theme).toBe('dark');
+    });
+
+    it('should sync shopping cart across multiple browser tabs', () => {
+      interface CartItem {
+        productId: string;
+        quantity: number;
+        price: number;
+      }
+
+      interface Cart {
+        items: CartItem[];
+        total: number;
+      }
+
+      const initialCart: Cart = {
+        items: [],
+        total: 0,
+      };
+
+      const { result } = renderHook(() => useLocalState<Cart>('shopping-cart', initialCart));
+
+      // Another tab adds an item
+      const updatedCart: Cart = {
+        items: [
+          { productId: 'PROD-001', quantity: 2, price: 29.99 },
+          { productId: 'PROD-002', quantity: 1, price: 49.99 },
+        ],
+        total: 109.97,
+      };
+
+      act(() => {
+        simulateStorageEvent('shopping-cart', JSON.stringify(updatedCart));
+      });
+
+      expect(result.current[0].items).toHaveLength(2);
+      expect(result.current[0].total).toBe(109.97);
+    });
+
+    it('should sync form state across tabs for collaborative editing', () => {
+      interface FormState {
+        title: string;
+        content: string;
+        lastModified: number;
+      }
+
+      const initialForm: FormState = {
+        title: '',
+        content: '',
+        lastModified: 0,
+      };
+
+      const { result } = renderHook(() => useLocalState<FormState>('form-draft', initialForm));
+
+      // Another tab updates the form
+      const updatedForm: FormState = {
+        title: 'Updated Title',
+        content: 'Updated content from other tab',
+        lastModified: Date.now(),
+      };
+
+      act(() => {
+        simulateStorageEvent('form-draft', JSON.stringify(updatedForm));
+      });
+
+      expect(result.current[0].title).toBe('Updated Title');
+      expect(result.current[0].content).toBe('Updated content from other tab');
+    });
+
+    it('should sync authentication token across tabs', () => {
+      interface AuthState {
+        token: string | null;
+        userId: string | null;
+        isLoggedIn: boolean;
+      }
+
+      const initialAuth: AuthState = {
+        token: null,
+        userId: null,
+        isLoggedIn: false,
+      };
+
+      const { result } = renderHook(() => useLocalState<AuthState>('auth-state', initialAuth));
+
+      // User logs in on another tab
+      const loggedInAuth: AuthState = {
+        token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+        userId: 'user-12345',
+        isLoggedIn: true,
+      };
+
+      act(() => {
+        simulateStorageEvent('auth-state', JSON.stringify(loggedInAuth));
+      });
+
+      expect(result.current[0].isLoggedIn).toBe(true);
+      expect(result.current[0].userId).toBe('user-12345');
+    });
+
+    it('should sync notification/read status across tabs', () => {
+      interface Notification {
+        id: string;
+        message: string;
+        read: boolean;
+        timestamp: number;
+      }
+
+      const initialNotifications: Notification[] = [
+        { id: '1', message: 'Message 1', read: false, timestamp: Date.now() },
+        { id: '2', message: 'Message 2', read: false, timestamp: Date.now() },
+      ];
+
+      const { result } = renderHook(() =>
+        useLocalState<Notification[]>('notifications', initialNotifications)
+      );
+
+      // User marks notifications as read in another tab
+      const updatedNotifications: Notification[] = [
+        { id: '1', message: 'Message 1', read: true, timestamp: Date.now() },
+        { id: '2', message: 'Message 2', read: true, timestamp: Date.now() },
+      ];
+
+      act(() => {
+        simulateStorageEvent('notifications', JSON.stringify(updatedNotifications));
+      });
+
+      expect(result.current[0][0].read).toBe(true);
+      expect(result.current[0][1].read).toBe(true);
+    });
+
     it('should work as a form state manager', () => {
       interface FormData {
         username: string;
