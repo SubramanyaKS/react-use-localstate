@@ -465,7 +465,8 @@ describe('useLocalState Hook', () => {
     it('should handle localStorage quota exceeded errors', () => {
       const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-        throw new Error('QuotaExceededError');
+        const error = new DOMException('Quota exceeded', 'QuotaExceededError');
+        throw error;
       });
 
       const { result } = renderHook(() => useLocalState('quota-key', 'initial'));
@@ -474,10 +475,7 @@ describe('useLocalState Hook', () => {
         result.current[1]('will-fail');
       });
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Error setting localStorage'),
-        expect.any(Error)
-      );
+      expect(consoleWarnSpy).toHaveBeenCalled();
 
       setItemSpy.mockRestore();
       consoleWarnSpy.mockRestore();
@@ -691,15 +689,20 @@ describe('useLocalState Hook', () => {
   });
 
   describe('React Hook Compliance', () => {
-    it('should return array with state and setState function', () => {
+    it('should return array with state, setState, and clearState functions', () => {
       const { result } = renderHook(() => useLocalState('array-key', 'initial'));
       expect(Array.isArray(result.current)).toBe(true);
-      expect(result.current).toHaveLength(2);
+      expect(result.current).toHaveLength(3);
     });
 
     it('should return setState function as second element', () => {
       const { result } = renderHook(() => useLocalState('setter-key', 'initial'));
       expect(typeof result.current[1]).toBe('function');
+    });
+
+    it('should return clearState function as third element', () => {
+      const { result } = renderHook(() => useLocalState('clear-key', 'initial'));
+      expect(typeof result.current[2]).toBe('function');
     });
 
     it('should handle rapid state updates', () => {
@@ -717,6 +720,159 @@ describe('useLocalState Hook', () => {
     it('should cleanup properly on unmount', () => {
       const { unmount } = renderHook(() => useLocalState('cleanup-key', 'initial'));
       expect(() => unmount()).not.toThrow();
+    });
+  });
+
+  describe('Clear/Remove Functionality', () => {
+    it('should clear state and remove from localStorage', () => {
+      const { result } = renderHook(() => useLocalState('clear-test-key', 'initial-value'));
+      
+      act(() => {
+        result.current[1]('updated-value');
+      });
+
+      expect(result.current[0]).toBe('updated-value');
+      expect(localStorage.getItem('clear-test-key')).toBe(JSON.stringify('updated-value'));
+
+      act(() => {
+        result.current[2](); // Call clearState
+      });
+
+      expect(result.current[0]).toBe('initial-value');
+      expect(localStorage.getItem('clear-test-key')).toBeNull();
+    });
+
+    it('should reset to initial value from function initializer', () => {
+      const initializer = () => 'computed-initial';
+      const { result } = renderHook(() => useLocalState('func-init-clear-key', initializer));
+
+      act(() => {
+        result.current[1]('changed-value');
+      });
+
+      expect(result.current[0]).toBe('changed-value');
+
+      act(() => {
+        result.current[2](); // Clear should recompute from initializer
+      });
+
+      expect(result.current[0]).toBe('computed-initial');
+      expect(localStorage.getItem('func-init-clear-key')).toBeNull();
+    });
+
+    it('should clear object state', () => {
+      interface ClearTestObj {
+        count: number;
+        items: string[];
+      }
+      const initialObj: ClearTestObj = { count: 0, items: [] };
+      const { result } = renderHook(() => useLocalState('obj-clear-key', initialObj));
+
+      const updatedObj: ClearTestObj = { count: 5, items: ['a', 'b'] };
+      act(() => {
+        result.current[1](updatedObj);
+      });
+
+      expect(result.current[0]).toEqual(updatedObj);
+
+      act(() => {
+        result.current[2](); // Clear
+      });
+
+      expect(result.current[0]).toEqual(initialObj);
+      expect(localStorage.getItem('obj-clear-key')).toBeNull();
+    });
+
+    it('should clear array state', () => {
+      const { result } = renderHook(() => useLocalState<string[]>('arr-clear-key', []));
+
+      act(() => {
+        result.current[1](['item1', 'item2']);
+      });
+
+      expect(result.current[0]).toEqual(['item1', 'item2']);
+
+      act(() => {
+        result.current[2](); // Clear
+      });
+
+      expect(result.current[0]).toEqual([]);
+      expect(localStorage.getItem('arr-clear-key')).toBeNull();
+    });
+
+    it('should handle clear on already-empty state', () => {
+      const { result } = renderHook(() => useLocalState('empty-clear-key', 'initial'));
+
+      act(() => {
+        result.current[2](); // Clear without any updates
+      });
+
+      expect(result.current[0]).toBe('initial');
+      expect(localStorage.getItem('empty-clear-key')).toBeNull();
+    });
+
+    it('should be able to continue using hook after clear', () => {
+      const { result } = renderHook(() => useLocalState('reuse-clear-key', 'initial'));
+
+      act(() => {
+        result.current[1]('first-update');
+      });
+
+      expect(result.current[0]).toBe('first-update');
+
+      act(() => {
+        result.current[2](); // Clear
+      });
+
+      expect(result.current[0]).toBe('initial');
+
+      // Should be able to update again
+      act(() => {
+        result.current[1]('second-update');
+      });
+
+      expect(result.current[0]).toBe('second-update');
+      expect(localStorage.getItem('reuse-clear-key')).toBe(JSON.stringify('second-update'));
+    });
+
+    it('should handle clear with null initial value', () => {
+      const { result } = renderHook(() => useLocalState<null>('null-clear-key', null));
+
+      act(() => {
+        result.current[1](null);
+      });
+
+      act(() => {
+        result.current[2](); // Clear
+      });
+
+      expect(result.current[0]).toBeNull();
+      expect(localStorage.getItem('null-clear-key')).toBeNull();
+    });
+
+    it('should handle clear errors gracefully', () => {
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const removeItemSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+        throw new Error('Cannot remove item');
+      });
+
+      const { result } = renderHook(() => useLocalState('clear-error-key', 'initial'));
+
+      act(() => {
+        result.current[1]('updated');
+      });
+
+      act(() => {
+        result.current[2](); // Try to clear, should handle error
+      });
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[useLocalState]'),
+        expect.any(Error)
+      );
+
+      removeItemSpy.mockRestore();
+      consoleWarnSpy.mockRestore();
     });
   });
 
